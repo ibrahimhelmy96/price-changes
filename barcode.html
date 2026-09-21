@@ -89,7 +89,9 @@
     <div id="status"></div>
 </div>
 
-<svg id="barcodeCanvas" style="display:none;"></svg>
+<!-- عناصر مخفية للرسم -->
+<svg id="barcodeSvg" style="display:none;"></svg>
+<canvas id="labelCanvas" style="display:none;"></canvas>
 
 <script>
     const { jsPDF } = window.jspdf;
@@ -98,19 +100,22 @@
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (e) => {
-                const data = new Uint8Array(e.target.result);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const firstSheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[firstSheetName];
-                const json = XLSX.utils.sheet_to_json(worksheet);
-                resolve(json);
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const json = XLSX.utils.sheet_to_json(worksheet);
+                    resolve(json);
+                } catch (err) {
+                    reject(err);
+                }
             };
             reader.onerror = (error) => reject(error);
             reader.readAsArrayBuffer(file);
         });
     }
 
-    // دالة للحصول على قيمة الخلية بغض النظر عن حالة الأحرف الكبيرة أو الصغيرة أو اللغة
     function getValue(row, possibleKeys) {
         for (let key in row) {
             const cleanKey = key.trim().toLowerCase();
@@ -137,10 +142,9 @@
         status.innerText = 'جاري المعالجة والمطابقة...';
 
         try {
-            const dataA = await readExcel(fileAInput); // شيت المخزون (A)
-            const dataB = await readExcel(fileBInput); // شيت الأسعار المعدلة (B)
+            const dataA = await readExcel(fileAInput);
+            const dataB = await readExcel(fileBInput);
 
-            // 1. قراءة كود الصنف واسمه من شيت A
             const mapA = new Map();
             dataA.forEach(row => {
                 const ref = getValue(row, ['Product Ref', 'ProductRef', 'ref', 'الرمز', 'الكود']);
@@ -150,7 +154,6 @@
                 }
             });
 
-            // 2. مطابقة الأكواد من شيت B مع شيت A وجلب السعر من B والاسم من A
             const matchedData = [];
             dataB.forEach(row => {
                 const ref = getValue(row, ['product ref', 'Product Ref', 'ref', 'الكود']);
@@ -174,19 +177,81 @@
                 return;
             }
 
-            generatePDF(matchedData);
+            status.innerText = 'جاري تجهيز الباركود واللغة العربية للطباعة...';
+            await generatePDF(matchedData);
             status.style.color = 'green';
             status.innerText = `تم مطابقة ${matchedData.length} صنف وإنشاء ملف الطباعة بنجاح!`;
 
         } catch (error) {
             console.error(error);
             status.style.color = 'red';
-            status.innerText = 'حدث خطأ أثناء معالجة الملفات.';
+            status.innerText = 'حدث خطأ أثناء معالجة الملفات: ' + error.message;
         }
     }
 
-    function generatePDF(items) {
-        const labelWidth = 80;  // عرض رول الطابعة مم (Epson TM-T20III)
+    // دالة رسم الملصق بالكامل مع دعم الخط العربي
+    function createLabelImage(item) {
+        return new Promise((resolve) => {
+            const canvas = document.createElement('canvas');
+            const scale = 3; // جودة عالية للطباعة
+            canvas.width = 400 * scale;  // عرض الملصق
+            canvas.height = 225 * scale; // ارتفاع الملصق
+            const ctx = canvas.getContext('2d');
+
+            // خلفية بيضاء
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 1. رسم اسم الصنف باللغة العربية (بخط عريض وواضح)
+            ctx.fillStyle = '#000000';
+            ctx.font = `bold ${18 * scale}px Arial, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.direction = 'rtl';
+            
+            // اقتطاع الاسم إذا كان طويلاً جداً
+            let displayName = String(item.name);
+            if (displayName.length > 35) {
+                displayName = displayName.substring(0, 35) + '...';
+            }
+            ctx.fillText(displayName, canvas.width / 2, 32 * scale);
+
+            // 2. توليد الباركود
+            const svg = document.getElementById('barcodeSvg');
+            JsBarcode(svg, item.ref, {
+                format: "CODE128",
+                displayValue: false,
+                margin: 0
+            });
+            const xml = new XMLSerializer().serializeToString(svg);
+            const svg64 = btoa(unescape(encodeURIComponent(xml)));
+            const img = new Image();
+
+            img.onload = () => {
+                // رسم صورة الباركود في المنتصف
+                ctx.drawImage(img, 20 * scale, 45 * scale, 360 * scale, 110 * scale);
+
+                // 3. كتابة Ref على اليسار والسعر على اليمين بخط صغير
+                ctx.font = `${13 * scale}px Arial, sans-serif`;
+                
+                // Ref على اليسار
+                ctx.textAlign = 'left';
+                ctx.direction = 'ltr';
+                ctx.fillText(`Ref: ${item.ref}`, 20 * scale, 195 * scale);
+
+                // السعر على اليمين
+                ctx.textAlign = 'right';
+                ctx.direction = 'ltr';
+                ctx.fillText(`Price: ${item.price}`, canvas.width - (20 * scale), 195 * scale);
+
+                resolve(canvas.toDataURL('image/png'));
+            };
+
+            img.src = 'data:image/svg+xml;base64,' + svg64;
+        });
+    }
+
+    async function generatePDF(items) {
+        const labelWidth = 80;  // عرض الورق بالـ مم
         const labelHeight = 45; // ارتفاع ملصق الباركود
         const totalHeight = items.length * labelHeight;
 
@@ -196,44 +261,22 @@
             format: [labelWidth, totalHeight]
         });
 
-        const svg = document.getElementById('barcodeCanvas');
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const imgData = await createLabelImage(item);
+            const topY = i * labelHeight;
 
-        items.forEach((item, index) => {
-            const topY = index * labelHeight;
+            // إضافة صورة الملصق المكتملة إلى الـ PDF
+            doc.addImage(imgData, 'PNG', 0, topY, labelWidth, labelHeight);
 
-            // 1. اسم الصنف من شيت A (بخط واضح)
-            doc.setFontSize(10);
-            doc.setFont("helvetica", "bold");
-            doc.text(String(item.name).substring(0, 35), labelWidth / 2, topY + 8, { align: 'center' });
-
-            // 2. الباركود كود 128 برقم Product Ref
-            JsBarcode(svg, item.ref, {
-                format: "CODE128",
-                displayValue: false,
-                margin: 0
-            });
-            
-            const xml = new XMLSerializer().serializeToString(svg);
-            const svg64 = btoa(unescape(encodeURIComponent(xml)));
-            const image64 = 'data:image/svg+xml;base64,' + svg64;
-
-            doc.addImage(image64, 'SVG', 5, topY + 12, 70, 18);
-
-            // 3. Product Ref على اليسار والسعر من شيت B على اليمين
-            doc.setFontSize(8);
-            doc.setFont("helvetica", "normal");
-            
-            doc.text(`Ref: ${item.ref}`, 5, topY + 35, { align: 'left' });
-            doc.text(`Price: ${item.price}`, labelWidth - 5, topY + 35, { align: 'right' });
-
-            // خط فاصل بين الملصقات
-            if (index < items.length - 1) {
+            // رسم خط فاصل تنقيط خفيف
+            if (i < items.length - 1) {
                 doc.setLineDashPattern([1, 1], 0);
                 doc.line(2, topY + labelHeight, labelWidth - 2, topY + labelHeight);
             }
-        });
+        }
 
-        // فتح ملف الـ PDF الجاهز للطباعة مباشرة
+        // فتح ملف الـ PDF الناتج
         doc.output('dataurlnewwindow');
     }
 </script>
