@@ -4,11 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>طباعة الباركود - Epson TM-T20III</title>
-    <!-- مكتبة قراءة ملفات الإكسيل -->
+    <!-- مكتبات معالجة الإكسيل والباركود والـ PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <!-- مكتبة توليد الباركود -->
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
-    <!-- مكتبة إنشاء ملفات PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <style>
@@ -77,12 +75,12 @@
     <h2>طابعة الباركود (Epson)</h2>
 
     <div class="file-group">
-        <label>شيت A (المخزون - الاسم و Product Ref):</label>
+        <label>شيت A (المخزون الأساسي):</label>
         <input type="file" id="fileA" accept=".xlsx, .xls">
     </div>
 
     <div class="file-group">
-        <label>شيت B (الأكواد - السعر و Product Ref):</label>
+        <label>شيت B (الأسعار المعدلة):</label>
         <input type="file" id="fileB" accept=".xlsx, .xls">
     </div>
 
@@ -91,13 +89,11 @@
     <div id="status"></div>
 </div>
 
-<!-- عنصر مخفي لتوليد الباركود كصورة -->
 <svg id="barcodeCanvas" style="display:none;"></svg>
 
 <script>
     const { jsPDF } = window.jspdf;
 
-    // دالة لقراءة ملف إكسيل
     function readExcel(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -114,6 +110,19 @@
         });
     }
 
+    // دالة للحصول على قيمة الخلية بغض النظر عن حالة الأحرف الكبيرة أو الصغيرة أو اللغة
+    function getValue(row, possibleKeys) {
+        for (let key in row) {
+            const cleanKey = key.trim().toLowerCase();
+            for (let p of possibleKeys) {
+                if (cleanKey === p.toLowerCase()) {
+                    return row[key];
+                }
+            }
+        }
+        return null;
+    }
+
     async function processFiles() {
         const fileAInput = document.getElementById('fileA').files[0];
         const fileBInput = document.getElementById('fileB').files[0];
@@ -125,42 +134,49 @@
         }
 
         status.style.color = 'blue';
-        status.innerText = 'جاري المعالجة...';
+        status.innerText = 'جاري المعالجة والمطابقة...';
 
         try {
-            const dataA = await readExcel(fileAInput);
-            const dataB = await readExcel(fileBInput);
+            const dataA = await readExcel(fileAInput); // شيت المخزون (A)
+            const dataB = await readExcel(fileBInput); // شيت الأسعار المعدلة (B)
 
-            // تحويل شيت B إلى خريطة (Map) لتسريع البحث باستخدام Product Ref
-            const mapB = new Map();
-            dataB.forEach(row => {
-                if (row['Product Ref'] !== undefined) {
-                    mapB.set(String(row['Product Ref']).trim(), row['السعر']);
+            // 1. قراءة كود الصنف واسمه من شيت A
+            const mapA = new Map();
+            dataA.forEach(row => {
+                const ref = getValue(row, ['Product Ref', 'ProductRef', 'ref', 'الرمز', 'الكود']);
+                const name = getValue(row, ['Product Name', 'ProductName', 'الاسم', 'اسم الصنف']);
+                if (ref !== null && ref !== undefined) {
+                    mapA.set(String(ref).trim(), name || '');
                 }
             });
 
-            // مطابقة البيانات
+            // 2. مطابقة الأكواد من شيت B مع شيت A وجلب السعر من B والاسم من A
             const matchedData = [];
-            dataA.forEach(row => {
-                const ref = row['Product Ref'] !== undefined ? String(row['Product Ref']).trim() : '';
-                if (ref && mapB.has(ref)) {
-                    matchedData.push({
-                        name: row['الاسم'] || '',
-                        ref: ref,
-                        price: mapB.get(ref) || ''
-                    });
+            dataB.forEach(row => {
+                const ref = getValue(row, ['product ref', 'Product Ref', 'ref', 'الكود']);
+                const price = getValue(row, ['price', 'Price', 'السعر']);
+
+                if (ref !== null && ref !== undefined) {
+                    const cleanRef = String(ref).trim();
+                    if (mapA.has(cleanRef)) {
+                        matchedData.push({
+                            ref: cleanRef,
+                            price: price !== null ? parseFloat(price).toFixed(2) : '',
+                            name: mapA.get(cleanRef)
+                        });
+                    }
                 }
             });
 
             if (matchedData.length === 0) {
                 status.style.color = 'red';
-                status.innerText = 'لم يتم العثور على أرقام مطابقة بين الشيتين!';
+                status.innerText = 'لم يتم العثور على أكواد مطابقة بين الشيتين!';
                 return;
             }
 
             generatePDF(matchedData);
             status.style.color = 'green';
-            status.innerText = 'تم إنشاء ملف الباركود وفتحه للطباعة بنجاح!';
+            status.innerText = `تم مطابقة ${matchedData.length} صنف وإنشاء ملف الطباعة بنجاح!`;
 
         } catch (error) {
             console.error(error);
@@ -170,12 +186,10 @@
     }
 
     function generatePDF(items) {
-        // إعدادات الورق الحراري (عرض 80 مم)
-        const labelWidth = 80;  // مم
-        const labelHeight = 45; // مم ارتفاع الملصق الواحد
+        const labelWidth = 80;  // عرض رول الطابعة مم (Epson TM-T20III)
+        const labelHeight = 45; // ارتفاع ملصق الباركود
         const totalHeight = items.length * labelHeight;
 
-        // إنشاء ملف PDF بطول متغير متصل
         const doc = new jsPDF({
             orientation: 'p',
             unit: 'mm',
@@ -187,12 +201,12 @@
         items.forEach((item, index) => {
             const topY = index * labelHeight;
 
-            // 1. كتابة الاسم بخط واضح في الأعلى
-            doc.setFontSize(11);
+            // 1. اسم الصنف من شيت A (بخط واضح)
+            doc.setFontSize(10);
             doc.setFont("helvetica", "bold");
-            doc.text(String(item.name).substring(0, 30), labelWidth / 2, topY + 8, { align: 'center' });
+            doc.text(String(item.name).substring(0, 35), labelWidth / 2, topY + 8, { align: 'center' });
 
-            // 2. توليد الباركود كـ Image
+            // 2. الباركود كود 128 برقم Product Ref
             JsBarcode(svg, item.ref, {
                 format: "CODE128",
                 displayValue: false,
@@ -205,24 +219,21 @@
 
             doc.addImage(image64, 'SVG', 5, topY + 12, 70, 18);
 
-            // 3. السعر على اليمين و Product Ref على اليسار بخط صغير أسفل الباركود
+            // 3. Product Ref على اليسار والسعر من شيت B على اليمين
             doc.setFontSize(8);
             doc.setFont("helvetica", "normal");
             
-            // اليسار: Product Ref
             doc.text(`Ref: ${item.ref}`, 5, topY + 35, { align: 'left' });
-            
-            // اليمين: السعر
             doc.text(`Price: ${item.price}`, labelWidth - 5, topY + 35, { align: 'right' });
 
-            // خط تنقيط فاصل خفيف
+            // خط فاصل بين الملصقات
             if (index < items.length - 1) {
                 doc.setLineDashPattern([1, 1], 0);
                 doc.line(2, topY + labelHeight, labelWidth - 2, topY + labelHeight);
             }
         });
 
-        // فتح الـ PDF مباشرة في تبويب جديد للطباعة
+        // فتح ملف الـ PDF الجاهز للطباعة مباشرة
         doc.output('dataurlnewwindow');
     }
 </script>
