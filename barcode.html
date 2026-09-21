@@ -187,30 +187,56 @@
         }
     }
 
+    // دالة لتوزيع النص الطويل على أسطر متعددة تلقائياً
+    function wrapText(ctx, text, maxWidth) {
+        const words = text.split(' ');
+        const lines = [];
+        let currentLine = words[0] || '';
+
+        for (let i = 1; i < words.length; i++) {
+            const word = words[i];
+            const width = ctx.measureText(currentLine + " " + word).width;
+            if (width < maxWidth) {
+                currentLine += " " + word;
+            } else {
+                lines.push(currentLine);
+                currentLine = word;
+            }
+        }
+        lines.push(currentLine);
+        return lines;
+    }
+
     function createLabelImage(item) {
         return new Promise((resolve) => {
             const canvas = document.createElement('canvas');
-            const scale = 2; // تقليل الكثافة لتوفير الذاكرة مع الحفاظ على وضوح الطباعة
+            const scale = 2;
             canvas.width = 300 * scale; 
-            canvas.height = 160 * scale; 
+            canvas.height = 165 * scale; 
             const ctx = canvas.getContext('2d');
 
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // 1. اسم الصنف بالعربي
+            // 1. طباعة اسم الصنف كاملاً بخط عريض وواضح
             ctx.fillStyle = '#000000';
-            ctx.font = `bold ${14 * scale}px Arial, sans-serif`;
+            ctx.font = `bold ${13 * scale}px Arial, sans-serif`;
             ctx.textAlign = 'center';
             ctx.direction = 'rtl';
-            
-            let displayName = String(item.name);
-            if (displayName.length > 32) {
-                displayName = displayName.substring(0, 32) + '...';
-            }
-            ctx.fillText(displayName, canvas.width / 2, 22 * scale);
 
-            // 2. رسم الباركود
+            const maxWidth = canvas.width - (20 * scale);
+            const lines = wrapText(ctx, String(item.name), maxWidth);
+
+            let currentY = 18 * scale;
+            const lineHeight = 16 * scale;
+
+            // طباعة أسطر الاسم كاملة بدون اقتطاع
+            lines.forEach((line) => {
+                ctx.fillText(line, canvas.width / 2, currentY);
+                currentY += lineHeight;
+            });
+
+            // 2. رسم خطوط الباركود في منطقة أصغر مدمجة في المنتصف
             const svg = document.getElementById('barcodeSvg');
             JsBarcode(svg, item.ref, {
                 format: "CODE128",
@@ -222,20 +248,23 @@
             const img = new Image();
 
             img.onload = () => {
-                ctx.drawImage(img, 15 * scale, 30 * scale, 270 * scale, 85 * scale);
+                // تضييق ارتفاع وعرض الباركود ليشغل مساحة أصغر
+                const barcodeY = Math.max(currentY + (2 * scale), 55 * scale);
+                const barcodeHeight = 55 * scale;
+                ctx.drawImage(img, 45 * scale, barcodeY, 210 * scale, barcodeHeight);
 
-                // 3. كتابة Ref والسعر
-                ctx.font = `${11 * scale}px Arial, sans-serif`;
+                // 3. طباعة Ref على اليسار والسعر على اليمين في الأسفل
+                ctx.font = `bold ${11 * scale}px Arial, sans-serif`;
                 
                 ctx.textAlign = 'left';
                 ctx.direction = 'ltr';
-                ctx.fillText(`Ref: ${item.ref}`, 15 * scale, 142 * scale);
+                ctx.fillText(`Ref: ${item.ref}`, 15 * scale, 150 * scale);
 
                 ctx.textAlign = 'right';
                 ctx.direction = 'ltr';
-                ctx.fillText(`Price: ${item.price}`, canvas.width - (15 * scale), 142 * scale);
+                ctx.fillText(`Price: ${item.price}`, canvas.width - (15 * scale), 150 * scale);
 
-                resolve(canvas.toDataURL('image/jpeg', 0.9)); // استغلال JPEG لتقليل حجم الذاكرة
+                resolve(canvas.toDataURL('image/jpeg', 0.95));
             };
 
             img.src = 'data:image/svg+xml;base64,' + svg64;
@@ -246,16 +275,15 @@
         const labelWidth = 80;  // 80mm
         const labelHeight = 45; // 45mm
 
-        // إنشاء مستند PDF مقاس الصفحة الواحدة فيه هو مقاس الاستيكر
         const doc = new jsPDF({
-            orientation: 'l', // Landscape للملصقات العريضة
+            orientation: 'l',
             unit: 'mm',
-            format: [labelHeight, labelWidth] // 80x45
+            format: [labelHeight, labelWidth]
         });
 
         for (let i = 0; i < items.length; i++) {
             if (i > 0) {
-                doc.addPage([labelHeight, labelWidth], 'l'); // إضافة صفحة ملصق جديدة
+                doc.addPage([labelHeight, labelWidth], 'l');
             }
             const item = items[i];
             const imgData = await createLabelImage(item);
