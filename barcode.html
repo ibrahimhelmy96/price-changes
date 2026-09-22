@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>طباعة الباركود - Epson TM-T20III</title>
-    <!-- مكتبات معالجة الإكسيل والباركود والـ PDF -->
+    <title>طباعة الملصقات العمودية - Epson TM-T20III</title>
+    <!-- مكتبات معالجة الإكسيل والـ PDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <style>
@@ -72,7 +71,7 @@
 <body>
 
 <div class="container">
-    <h2>طابعة الباركود (Epson)</h2>
+    <h2>طابعة الملصقات (Epson)</h2>
 
     <div class="file-group">
         <label>شيت A (المخزون الأساسي):</label>
@@ -84,12 +83,10 @@
         <input type="file" id="fileB" accept=".xlsx, .xls">
     </div>
 
-    <button onclick="processFiles()">مطابقة وإنشاء ملف الباركود</button>
+    <button onclick="processFiles()">مطابقة وإنشاء ملف الطباعة العمودي</button>
 
     <div id="status"></div>
 </div>
-
-<svg id="barcodeSvg" style="display:none;"></svg>
 
 <script>
     const { jsPDF } = window.jspdf;
@@ -175,10 +172,10 @@
                 return;
             }
 
-            status.innerText = `جاري تجهيز الباركود لـ (${matchedData.length}) صنف...`;
+            status.innerText = `جاري تجهيز الملصقات لـ (${matchedData.length}) صنف...`;
             await generatePDF(matchedData);
             status.style.color = 'green';
-            status.innerText = `تم مطابقة ${matchedData.length} صنف وإنشاء ملف الطباعة بنجاح!`;
+            status.innerText = `تم مطابقة ${matchedData.length} صنف وإنشاء ملف الطباعة العمودي بنجاح!`;
 
         } catch (error) {
             console.error(error);
@@ -187,7 +184,7 @@
         }
     }
 
-    // دالة لتوزيع النص الطويل على أسطر متعددة تلقائياً
+    // دالة تقسيم اسم الصنف الطويل إلى أسطر
     function wrapText(ctx, text, maxWidth) {
         const words = text.split(' ');
         const lines = [];
@@ -211,6 +208,7 @@
         return new Promise((resolve) => {
             const canvas = document.createElement('canvas');
             const scale = 2;
+            // العرض 80mm والارتفاع 45mm بتنسيق رأسي عمودي
             canvas.width = 300 * scale; 
             canvas.height = 165 * scale; 
             const ctx = canvas.getContext('2d');
@@ -218,56 +216,38 @@
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // 1. طباعة اسم الصنف كاملاً بخط عريض وواضح
+            // 1. اسم الصنف في المنتصف مرتفع قليلاً بخط كبير وواضح
             ctx.fillStyle = '#000000';
-            ctx.font = `bold ${13 * scale}px Arial, sans-serif`;
+            ctx.font = `bold ${16 * scale}px Arial, sans-serif`;
             ctx.textAlign = 'center';
             ctx.direction = 'rtl';
 
             const maxWidth = canvas.width - (20 * scale);
             const lines = wrapText(ctx, String(item.name), maxWidth);
 
-            let currentY = 18 * scale;
-            const lineHeight = 16 * scale;
+            let currentY = 28 * scale;
+            const lineHeight = 21 * scale;
 
-            // طباعة أسطر الاسم كاملة بدون اقتطاع
             lines.forEach((line) => {
                 ctx.fillText(line, canvas.width / 2, currentY);
                 currentY += lineHeight;
             });
 
-            // 2. رسم خطوط الباركود في منطقة أصغر مدمجة في المنتصف
-            const svg = document.getElementById('barcodeSvg');
-            JsBarcode(svg, item.ref, {
-                format: "CODE128",
-                displayValue: false,
-                margin: 0
-            });
-            const xml = new XMLSerializer().serializeToString(svg);
-            const svg64 = btoa(unescape(encodeURIComponent(xml)));
-            const img = new Image();
+            // 2. السعر والـ Ref بخط صغير نسبياً في الأسفل
+            ctx.font = `${11 * scale}px Arial, sans-serif`;
+            const bottomY = 148 * scale;
 
-            img.onload = () => {
-                // تضييق ارتفاع وعرض الباركود ليشغل مساحة أصغر
-                const barcodeY = Math.max(currentY + (2 * scale), 55 * scale);
-                const barcodeHeight = 55 * scale;
-                ctx.drawImage(img, 45 * scale, barcodeY, 210 * scale, barcodeHeight);
+            // السعر على اليمين
+            ctx.textAlign = 'right';
+            ctx.direction = 'ltr';
+            ctx.fillText(`Price: ${item.price}`, canvas.width - (15 * scale), bottomY);
 
-                // 3. طباعة Ref على اليسار والسعر على اليمين في الأسفل
-                ctx.font = `bold ${11 * scale}px Arial, sans-serif`;
-                
-                ctx.textAlign = 'left';
-                ctx.direction = 'ltr';
-                ctx.fillText(`Ref: ${item.ref}`, 15 * scale, 150 * scale);
+            // الـ Ref على اليسار
+            ctx.textAlign = 'left';
+            ctx.direction = 'ltr';
+            ctx.fillText(`Ref: ${item.ref}`, 15 * scale, bottomY);
 
-                ctx.textAlign = 'right';
-                ctx.direction = 'ltr';
-                ctx.fillText(`Price: ${item.price}`, canvas.width - (15 * scale), 150 * scale);
-
-                resolve(canvas.toDataURL('image/jpeg', 0.95));
-            };
-
-            img.src = 'data:image/svg+xml;base64,' + svg64;
+            resolve(canvas.toDataURL('image/jpeg', 0.95));
         });
     }
 
@@ -275,15 +255,16 @@
         const labelWidth = 80;  // 80mm
         const labelHeight = 45; // 45mm
 
+        // الضبط العمودي (Portrait 'p') للرول الحراري
         const doc = new jsPDF({
-            orientation: 'l',
+            orientation: 'p',
             unit: 'mm',
-            format: [labelHeight, labelWidth]
+            format: [labelWidth, labelHeight]
         });
 
         for (let i = 0; i < items.length; i++) {
             if (i > 0) {
-                doc.addPage([labelHeight, labelWidth], 'l');
+                doc.addPage([labelWidth, labelHeight], 'p');
             }
             const item = items[i];
             const imgData = await createLabelImage(item);
